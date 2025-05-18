@@ -1,0 +1,253 @@
+#!/bin/bash
+
+function constructor
+{
+    constructor="$(realpath "$0" | xargs dirname)"
+}
+
+function constructor_directory
+{
+    for constructor_directory in   \
+        "package/build"            \
+        "package/execution"        \
+        "package/source"           \
+        "package/source-archive"   \
+        "toolchain/archive"
+    do
+        mkdir --parents "$constructor/$constructor_directory"
+    done
+}
+
+function constructor_environment
+{
+    CARET_RETURN='\e[1A\e[0K'
+    COLOR_DEFAULT='\e[0m'
+    COLOR_RED='\e[1;31m'
+    COLOR_BLUE='\e[1;34m'
+    COLOR_GREEN='\e[1;32m'
+}
+
+function toolchain_target
+{
+    toolchain_target="$(uname -m)-toolchain-linux-gnu"
+}
+
+function toolchain_root
+{
+    toolchain_root="$constructor/toolchain/root"
+
+    if [ ! -d "$toolchain_root" ]
+    then
+        mkdir "$toolchain_root"
+
+        for toolchain_directory in \
+            "etc"                  \
+            "usr"                  \
+            "root"
+        do
+            mkdir "$toolchain_root/$toolchain_directory"
+        done
+
+        for toolchain_directory in \
+            "usr/bin"              \
+            "usr/lib"              \
+            "usr/lib64"            \
+            "usr/sbin"
+        do
+            mkdir "$toolchain_root/$toolchain_directory"
+
+            ln --symbolic "$toolchain_root/$toolchain_directory" \
+               --relative "$toolchain_root"
+        done
+    fi
+}
+
+function toolchain_config
+{
+    toolchain_config="$constructor/toolchain/config"
+
+    if ! cp --recursive "$toolchain_config/"* "$toolchain_root/etc"
+    then
+        return 1
+    fi
+}
+
+function toolchain_archive
+{
+    toolchain_archive="$constructor/toolchain/archive/toolchain.tar.gz"
+
+    if [ ! -f "$toolchain_archive" ]
+    then
+        if ! tar                          \
+            --create                      \
+            --file "$toolchain_archive"   \
+            --directory "$toolchain_root" \
+            --gzip "."
+        then
+            return 1
+        fi
+    fi
+}
+
+function toolchain_check
+{
+    echo -e "[$COLOR_BLUE INFO $COLOR_DEFAULT] Toolchain - $@"
+
+    if eval "$@"
+    then
+        echo -e "$CARET_RETURN[$COLOR_GREEN DONE $COLOR_DEFAULT] Toolchain - $@"
+    else
+        echo -e "$CARET_RETURN[$COLOR_RED FAIL $COLOR_DEFAULT] Toolchain - $@"
+
+        exit 1
+    fi
+}
+
+function package_recipe
+{
+    package_recipe="$constructor/package/recipe/$package"
+
+    if ! source "$package_recipe"
+    then
+        return 1
+    fi
+}
+
+function package_source_archive
+{
+    package_source_archive="$constructor/package/source-archive/$(basename "$package_address")"
+
+    if [ ! -f "$package_source_archive" ]
+    then
+        if ! wget                         \
+            --quiet                       \
+            --no-check-certificate        \
+            --output-document             \
+                "$package_source_archive" \
+                "$package_address"
+        then
+            return 1
+        fi
+    fi
+}
+
+function package_source
+{
+    package_source="$constructor/package/source/$package"
+
+    if [ ! -d "$package_source" ]
+    then
+        mkdir "$package_source"
+
+        if ! tar                             \
+            --extract                        \
+            --file "$package_source_archive" \
+            --directory "$package_source"    \
+            --strip-components 1
+        then
+            return 1
+        fi
+    fi
+}
+
+function package_build
+{
+    package_build="$constructor/package/build/$package"
+
+    if [ ! -d "$package_build" ]
+    then
+        mkdir "$package_build"
+
+        cd "$package_build"
+
+        if ! package_execution "do_configure" || \
+           ! package_execution "do_build"     || \
+           ! package_execution "do_install"
+        then
+            return 1
+        fi
+    fi
+}
+
+function package_execution
+{
+    package_execution="$constructor/package/execution/$package"
+
+    if [ ! -d "$package_execution" ]
+    then
+        mkdir "$package_execution"
+    fi
+
+    package_execution_file="$package_execution/$@"
+
+    if ! eval "$@"                   \
+        1> "$package_execution_file" \
+        2> "$package_execution_file"
+    then
+        return 1
+    fi
+}
+
+function package_check
+{
+    echo -e "[$COLOR_BLUE INFO $COLOR_DEFAULT] $package - $@"
+
+    if eval "$@"
+    then
+        echo -e "$CARET_RETURN[$COLOR_GREEN DONE $COLOR_DEFAULT] $package - $@"
+    else
+        echo -e "$CARET_RETURN[$COLOR_RED FAIL $COLOR_DEFAULT] $package - $@"
+
+        exit 1
+    fi
+}
+
+function main
+{
+    constructor
+    constructor_directory
+    constructor_environment
+
+    toolchain_check "toolchain_target"
+    toolchain_check "toolchain_root"
+    toolchain_check "toolchain_config"
+
+    export PATH="$toolchain_root/toolchain/bin:$PATH"
+
+    for package in         \
+        "01-binutils"      \
+        "02-gcc"           \
+        "03-linux-headers" \
+        "04-glibc"         \
+        "05-libstdc++"     \
+        "06-m4"            \
+        "07-ncurses"       \
+        "08-bash"          \
+        "09-coreutils"     \
+        "10-diffutils"     \
+        "11-findutils"     \
+        "12-file"          \
+        "13-gawk"          \
+        "14-grep"          \
+        "15-gzip"          \
+        "16-make"          \
+        "17-patch"         \
+        "18-sed"           \
+        "19-tar"           \
+        "20-xz"            \
+        "21-zlib"          \
+        "22-openssl"       \
+        "23-wget"          \
+        "24-binutils"      \
+        "25-gcc"
+    do
+        package_check "package_recipe"
+        package_check "package_source_archive"
+        package_check "package_source"
+        package_check "package_build"
+    done
+
+    toolchain_check "toolchain_archive"
+}
+
+main
