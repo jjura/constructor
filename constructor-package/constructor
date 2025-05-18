@@ -1,0 +1,229 @@
+#!/bin/bash
+
+function constructor
+{
+    constructor="$(realpath "$0" | xargs dirname)"
+}
+
+function constructor_directory
+{
+    for constructor_directory in \
+        "build-archive"          \
+        "build"                  \
+        "execution"              \
+        "root"                   \
+        "source"                 \
+        "source-archive"
+    do
+        mkdir "$constructor/package/$constructor_directory"
+    done
+}
+
+function constructor_environment
+{
+    CARET_RETURN='\e[1A\e[0K'
+    COLOR_DEFAULT='\e[0m'
+    COLOR_RED='\e[1;31m'
+    COLOR_BLUE='\e[1;34m'
+    COLOR_GREEN='\e[1;32m'
+}
+
+function package_recipe
+{
+    package_recipe="$constructor/package/recipe/$package/build"
+
+    if ! source "$package_recipe"
+    then
+        return 1
+    fi
+}
+
+function package_dependency
+{
+    for package_dependency in $package_dependencies
+    do
+        if ! CARET_INDENT=" $CARET_INDENT " bash "$0" "$package_dependency"
+        then
+            exit 1
+        fi
+    done
+}
+
+function package_dependency_archive
+{
+    for package_dependency in $package_dependencies
+    do
+        package_dependency_archive="$constructor/package/build-archive/$package_dependency.tar.gz"
+
+        if ! tar                                 \
+            --extract                            \
+            --file "$package_dependency_archive" \
+            --directory "/"                      \
+            --strip-components 1
+        then
+            return 1
+        fi
+    done
+}
+
+function package_archive
+{
+    package_archive="$constructor/package/build-archive/$package.tar.gz"
+
+    if [ -f "$package_archive" ]
+    then
+        exit 0
+    fi
+}
+
+function package_source_archive
+{
+    package_source_archive="$constructor/package/source-archive/$(basename "$package_address")"
+
+    if [ ! -f "$package_source_archive" ]
+    then
+        if ! wget                         \
+            --quiet                       \
+            --no-check-certificate        \
+            --output-document             \
+                "$package_source_archive" \
+                "$package_address"
+        then
+            return 1
+        fi
+    fi
+}
+
+function package_source
+{
+    package_source="$constructor/package/source/$package"
+
+    if [ ! -d "$package_source" ]
+    then
+        mkdir "$package_source"
+
+        if ! tar                             \
+            --extract                        \
+            --file "$package_source_archive" \
+            --directory "$package_source"    \
+            --strip-components 1
+        then
+            return 1
+        fi
+    fi
+}
+
+function package_root
+{
+    package_root="$constructor/package/root/$package"
+
+    if [ ! -d "$package_root" ]
+    then
+        mkdir "$package_root" "$package_root/usr"
+
+        for package_directory in \
+            "usr/bin"            \
+            "usr/lib"            \
+            "usr/lib64"          \
+            "usr/sbin"
+        do
+            mkdir "$package_root/$package_directory"
+
+            ln --symbolic "$package_root/$package_directory" \
+               --relative "$package_root"
+        done
+    fi
+}
+
+function package_build
+{
+    package_build="$constructor/package/build/$package"
+
+    if [ ! -d "$package_build" ]
+    then
+        mkdir "$package_build"
+
+        cd "$package_build"
+
+        if ! package_execution "do_configure" || \
+           ! package_execution "do_build"     || \
+           ! package_execution "do_install"
+        then
+            return 1
+        fi
+    fi
+}
+
+function package_build_archive
+{
+    package_build_archive="$constructor/package/build-archive/$package.tar.gz"
+
+    if [ ! -f "$package_build_archive" ]
+    then
+        if ! tar                                                 \
+            --create                                             \
+            --file "$package_build_archive"                      \
+            --directory "$(dirname "$package_recipe")" "install" \
+            --directory "$(dirname "$package_root")"             \
+                        "$(basename "$package_root")"            \
+            --transform "s:^$(basename "$package_root")/:root/:" \
+            --gzip
+        then
+            return 1
+        fi
+    fi
+}
+
+function package_execution
+{
+    package_execution="$constructor/package/execution/$package"
+
+    if [ ! -d "$package_execution" ]
+    then
+        mkdir "$package_execution"
+    fi
+
+    package_execution_file="$package_execution/$@"
+
+    if ! eval "$@"                   \
+        1> "$package_execution_file" \
+        2> "$package_execution_file"
+    then
+        return 1
+    fi
+}
+
+function package_check
+{
+    echo -e "[$COLOR_BLUE INFO $COLOR_DEFAULT]$CARET_INDENT $package - $@"
+
+    if eval "$@"
+    then
+        echo -e "$CARET_RETURN[$COLOR_GREEN DONE $COLOR_DEFAULT]$CARET_INDENT $package - $@"
+    else
+        echo -e "$CARET_RETURN[$COLOR_RED FAIL $COLOR_DEFAULT]$CARET_INDENT $package - $@"
+
+        exit 1
+    fi
+}
+
+function main
+{
+    constructor
+    constructor_directory
+    constructor_environment
+
+    package="$@"
+
+    package_check "package_recipe"
+    package_dependency
+    package_check "package_dependency_archive"
+    package_archive
+    package_check "package_source_archive"
+    package_check "package_source"
+    package_check "package_root"
+    package_check "package_build"
+    package_check "package_build_archive"
+}
+
+main "$@"
